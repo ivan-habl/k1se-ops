@@ -1,6 +1,6 @@
-From fdf41bf92d23a7d069e86c93a82bb7774cb3a73e Mon Sep 17 00:00:00 2001
-From: Ivan Habl <ivan-habl@users.noreply.github.com>
-Date: Sat, 21 Nov 2026 20:16:17 +0300
+From b9c45e8bb97667e6638a228f1bc7901bad37e94f Mon Sep 17 00:00:00 2001
+From: Ivan Habl <ivan.habl88@gmail.com>
+Date: Sat, 21 Nov 2026 20:52:52 +0300
 Subject: [PATCH 2/3] armcm_timer: fix GD32F303 SysTick one-shot and clear
  PENDST
 

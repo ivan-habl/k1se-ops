@@ -1,6 +1,6 @@
-From 8da0477d4655d3642aa7f6652cb0cfa4902e2165 Mon Sep 17 00:00:00 2001
-From: Ivan Habl <ivan-habl@users.noreply.github.com>
-Date: Sat, 21 Nov 2026 20:16:17 +0300
+From 7708c11df2991a5fcd8601c9e4fcb00ef8554785 Mon Sep 17 00:00:00 2001
+From: Ivan Habl <ivan.habl88@gmail.com>
+Date: Sat, 21 Nov 2026 20:52:52 +0300
 Subject: [PATCH 3/3] tmcuart: keep fixed cfg_bit_time on 32-bit MCU and extend
  RX window
 
