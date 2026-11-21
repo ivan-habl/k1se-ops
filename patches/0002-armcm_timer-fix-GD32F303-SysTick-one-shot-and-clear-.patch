@@ -1,0 +1,46 @@
+From fdf41bf92d23a7d069e86c93a82bb7774cb3a73e Mon Sep 17 00:00:00 2001
+From: Ivan Habl <ivan-habl@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 20:16:17 +0300
+Subject: [PATCH 2/3] armcm_timer: fix GD32F303 SysTick one-shot and clear
+ PENDST
+
+PR #7369 skipped clearing SysTick->LOAD in timer_set_diff() for GD32F303,
+leaving SysTick in auto-reload mode. Under fast stepper_event load or
+nested USART2 interrupts calling timer_kick(), spurious PENDSTSET caused
+premature SysTick_Handler re-entry and corrupted software tmcuart timing.
+
+Stop auto-reload in SysTick_Handler() and clear PENDSTCLR in both
+SysTick_Handler() and timer_set_diff().
+---
+ src/generic/armcm_timer.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/generic/armcm_timer.c b/src/generic/armcm_timer.c
+index 35fd18e0..fc65b8be 100644
+--- a/src/generic/armcm_timer.c
++++ b/src/generic/armcm_timer.c
+@@ -36,7 +36,9 @@ timer_set_diff(uint32_t value)
+ {
+     SysTick->LOAD = value;
+     SysTick->VAL = 0;
+-#if !CONFIG_MACH_GD32F303XX
++#if CONFIG_MACH_GD32F303XX
++    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
++#else
+     // Most chips generate a one-shot interrupt after clearing LOAD here.
+     // GD32F303 requires LOAD to remain set for the interrupt to trigger.
+     SysTick->LOAD = 0;
+@@ -160,6 +162,10 @@ void __visible __aligned(16) // aligning helps stabilize perf benchmarks
+ SysTick_Handler(void)
+ {
+     irq_disable();
++#if CONFIG_MACH_GD32F303XX
++    SysTick->LOAD = 0;
++    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
++#endif
+     uint32_t diff = timer_dispatch_many();
+     timer_set_diff(diff);
+     irq_enable();
+-- 
+2.43.0
+

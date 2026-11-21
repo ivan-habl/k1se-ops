@@ -1,0 +1,45 @@
+From 8da0477d4655d3642aa7f6652cb0cfa4902e2165 Mon Sep 17 00:00:00 2001
+From: Ivan Habl <ivan-habl@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 20:16:17 +0300
+Subject: [PATCH 3/3] tmcuart: keep fixed cfg_bit_time on 32-bit MCU and extend
+ RX window
+
+Avoid bit_time drift caused by interrupt jitter during the sync nibble
+on 120 MHz GD32F303 and extend start-bit wait window to 128 sub-bits.
+---
+ src/tmcuart.c | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/src/tmcuart.c b/src/tmcuart.c
+index a2f5f8fc..d9d674f9 100644
+--- a/src/tmcuart.c
++++ b/src/tmcuart.c
+@@ -85,7 +85,7 @@ tmcuart_read_sync_event(struct timer *timer)
+         t->timer.func = tmcuart_read_event;
+         return tmcuart_read_event(timer);
+     }
+-    if (t->pos++ >= 64) {
++    if (t->pos++ >= 128) {
+         // Timeout
+         t->read_count = 0;
+         return tmcuart_finalize(t);
+@@ -157,12 +157,11 @@ tmcuart_send_sync_event(struct timer *timer)
+         uint32_t offset = cur - t->timer.waketime;
+         t->bit_time = offset;
+     } else if (t->pos >= 5) {
+-        // Last bit of sync nibble just sent - calculate actual baud rate used
+-        uint32_t offset = cur - t->timer.waketime, start_offset = t->bit_time;
+-        int32_t diff = offset - start_offset;
+-        t->bit_time = t->cfg_bit_time + DIV_ROUND_CLOSEST(diff, 4);
++        // On fast 32-bit MCUs, single-IRQ jitter during the sync nibble must
++        // not skew bit_time for the entire frame. Use exact cfg_bit_time.
++        t->bit_time = t->cfg_bit_time;
+         t->timer.func = tmcuart_send_event;
+-        t->timer.waketime += diff + t->bit_time;
++        t->timer.waketime += t->bit_time;
+         return SF_RESCHEDULE;
+     }
+     t->timer.waketime += t->cfg_bit_time;
+-- 
+2.43.0
+

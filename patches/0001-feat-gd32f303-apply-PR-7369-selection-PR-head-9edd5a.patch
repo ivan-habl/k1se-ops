@@ -1,0 +1,610 @@
+From f06ee276e140e810ae72cbecdacef2bddfc93db7 Mon Sep 17 00:00:00 2001
+From: K1SE Builder <local@k1se.lan>
+Date: Wed, 4 Nov 2026 03:02:38 +0300
+Subject: [PATCH 1/3] feat(gd32f303): apply PR #7369 selection (PR head
+ 9edd5a34)
+
+---
+ src/generic/armcm_boot.c   |  4 +-
+ src/generic/armcm_timer.c  |  4 ++
+ src/stm32/Kconfig          | 35 +++++++++++---
+ src/stm32/Makefile         | 21 ++++++--
+ src/stm32/i2c.c            | 17 +++++--
+ src/stm32/internal.h       | 98 +++++++++++++++++++++++++++++++++++++-
+ src/stm32/spi.c            | 13 ++++-
+ src/stm32/stm32f0_serial.c | 18 ++++++-
+ src/stm32/stm32f1.c        | 79 +++++++++++++++++++++++++++---
+ 9 files changed, 264 insertions(+), 25 deletions(-)
+
+diff --git a/src/generic/armcm_boot.c b/src/generic/armcm_boot.c
+index 17eb8c8b..6945d8a5 100644
+--- a/src/generic/armcm_boot.c
++++ b/src/generic/armcm_boot.c
+@@ -59,7 +59,7 @@ reset_handler_stage_two(void)
+     }
+ 
+     // Reset all user interrupt priorities
+-#if __CORTEX_M == 33
++#if __CORTEX_M == 23 || __CORTEX_M == 33
+     for (i = 0; i < ARRAY_SIZE(NVIC->IPR); i++)
+         NVIC->IPR[i] = 0;
+ #else
+@@ -75,7 +75,7 @@ reset_handler_stage_two(void)
+     SCB->ICSR = SCB_ICSR_PENDSVCLR_Msk | SCB_ICSR_PENDSTCLR_Msk;
+ 
+     // Reset all system interrupt priorities
+-#if __CORTEX_M == 7 || __CORTEX_M == 33
++#if __CORTEX_M == 7 || __CORTEX_M == 23 || __CORTEX_M == 33
+     for (i = 0; i < ARRAY_SIZE(SCB->SHPR); i++)
+         SCB->SHPR[i] = 0;
+ #else
+diff --git a/src/generic/armcm_timer.c b/src/generic/armcm_timer.c
+index e2d77924..35fd18e0 100644
+--- a/src/generic/armcm_timer.c
++++ b/src/generic/armcm_timer.c
+@@ -36,7 +36,11 @@ timer_set_diff(uint32_t value)
+ {
+     SysTick->LOAD = value;
+     SysTick->VAL = 0;
++#if !CONFIG_MACH_GD32F303XX
++    // Most chips generate a one-shot interrupt after clearing LOAD here.
++    // GD32F303 requires LOAD to remain set for the interrupt to trigger.
+     SysTick->LOAD = 0;
++#endif
+ }
+ 
+ // Return the current time (in absolute clock ticks).
+diff --git a/src/stm32/Kconfig b/src/stm32/Kconfig
+index e9aa0879..27758b67 100644
+--- a/src/stm32/Kconfig
++++ b/src/stm32/Kconfig
+@@ -14,7 +14,7 @@ config STM32_SELECT
+     select HAVE_STRICT_TIMING
+     select HAVE_CHIPID
+     select HAVE_STEPPER_OPTIMIZED_BOTH_EDGE if !MACH_STM32H7
+-    select HAVE_BOOTLOADER_REQUEST
++    select HAVE_BOOTLOADER_REQUEST if !MACH_GD32E23X
+     select HAVE_LIMITED_CODE_SIZE if FLASH_SIZE < 0x10000
+ 
+ config BOARD_DIRECTORY
+@@ -111,6 +111,14 @@ choice
+         bool "Nation N32G455"
+         select MACH_N32G45x
+         select MACH_STM32F1
++    config MACH_GD32F303
++        bool "GigaDevice GD32F303"
++        select MACH_GD32F303XX
++        select MACH_STM32F1
++    config MACH_GD32E230
++        bool "GigaDevice GD32E230"
++        select MACH_GD32E23X
++        select HAVE_LIMITED_CODE_SIZE
+ endchoice
+ 
+ config MACH_STM32F103x6
+@@ -149,6 +157,10 @@ config MACH_STM32L4
+     bool
+ config MACH_N32G45x
+     bool
++config MACH_GD32F303XX
++    bool
++config MACH_GD32E23X
++    bool
+ config HAVE_STM32_USBFS
+     bool
+     default y if MACH_STM32F0x2 || MACH_STM32G0Bx || MACH_STM32L4 || MACH_STM32G4
+@@ -197,6 +209,8 @@ config MCU
+     default "stm32h750xx" if MACH_STM32H750
+     default "stm32l412xx" if MACH_STM32L412
+     default "stm32f103xe" if MACH_N32G45x
++    default "gd32f303" if MACH_GD32F303
++    default "gd32e230" if MACH_GD32E230
+ 
+ config CLOCK_FREQ
+     int
+@@ -217,6 +231,8 @@ config CLOCK_FREQ
+     default 80000000 if MACH_STM32L412
+     default 64000000 if MACH_N32G45x && STM32_CLOCK_REF_INTERNAL
+     default 144000000 if MACH_N32G45x
++    default 120000000 if MACH_GD32F303XX
++    default 72000000 if MACH_GD32E23X
+ 
+ config FLASH_SIZE
+     hex
+@@ -230,6 +246,8 @@ config FLASH_SIZE
+     default 0x20000 if MACH_STM32H750
+     default 0x200000 if MACH_STM32H743 || MACH_STM32F765
+     default 0x20000 if MACH_N32G45x
++    default 0x20000 if MACH_GD32F303
++    default 0x10000 if MACH_GD32E230
+ 
+ config FLASH_BOOT_ADDRESS
+     hex
+@@ -258,6 +276,8 @@ config RAM_SIZE
+     default 0x24000 if MACH_STM32G0Bx
+     default 0x20000 if MACH_STM32H7
+     default 0x10000 if MACH_N32G45x
++    default 0x8000 if MACH_GD32F303
++    default 0x2000 if MACH_GD32E230
+ 
+ config STACK_SIZE
+     int
+@@ -265,7 +285,7 @@ config STACK_SIZE
+ 
+ config STM32F103GD_DISABLE_SWD
+     bool "Disable SWD at startup (for GigaDevice stm32f103 clones)"
+-    depends on MACH_STM32F103 && LOW_LEVEL_OPTIONS
++    depends on (MACH_STM32F103 || MACH_GD32F303XX) && LOW_LEVEL_OPTIONS
+     default n
+     help
+         The GigaDevice clone of the STM32F103 may not be able to
+@@ -290,13 +310,15 @@ config STM32_DFU_ROM_ADDRESS
+ choice
+     prompt "Bootloader offset"
+     config STM32_FLASH_START_2000
+-        bool "8KiB bootloader" if MACH_STM32F1 || MACH_STM32F070 || MACH_STM32G0 || MACH_STM32G4 || MACH_STM32F0x2
++        bool "8KiB bootloader" if MACH_STM32F1 || MACH_STM32F070 || MACH_STM32G0 || MACH_STM32G4 || MACH_STM32F0x2 || MACH_GD32E23X
++    config STM32_FLASH_START_3000
++        bool "12KiB bootloader" if MACH_GD32F303XX || MACH_GD32E23X
+     config STM32_FLASH_START_5000
+-        bool "20KiB bootloader" if MACH_STM32F103
++        bool "20KiB bootloader" if MACH_STM32F103 || MACH_GD32E23X
+     config STM32_FLASH_START_7000
+-        bool "28KiB bootloader" if MACH_STM32F1
++        bool "28KiB bootloader" if MACH_STM32F1 || MACH_GD32E23X
+     config STM32_FLASH_START_8000
+-        bool "32KiB bootloader" if MACH_STM32F1 || MACH_STM32F2 || MACH_STM32F4 || MACH_STM32F7 || MACH_STM32H750
++        bool "32KiB bootloader" if MACH_STM32F1 || MACH_STM32F2 || MACH_STM32F4 || MACH_STM32F7 || MACH_STM32H750 || MACH_GD32E23X
+     config STM32_FLASH_START_8800
+         bool "34KiB bootloader" if MACH_STM32F103
+     config STM32_FLASH_START_20200
+@@ -325,6 +347,7 @@ config FLASH_APPLICATION_ADDRESS
+     default 0x8000800 if STM32_FLASH_START_800
+     default 0x8001000 if STM32_FLASH_START_1000
+     default 0x8002000 if STM32_FLASH_START_2000
++    default 0x8003000 if STM32_FLASH_START_3000
+     default 0x8004000 if STM32_FLASH_START_4000
+     default 0x8005000 if STM32_FLASH_START_5000
+     default 0x8007000 if STM32_FLASH_START_7000
+diff --git a/src/stm32/Makefile b/src/stm32/Makefile
+index 3c158d51..cecc050f 100644
+--- a/src/stm32/Makefile
++++ b/src/stm32/Makefile
+@@ -7,6 +7,7 @@ dirs-y += src/stm32 src/generic lib/fast-hash
+ dirs-$(CONFIG_MACH_STM32F0) += lib/stm32f0
+ dirs-$(CONFIG_MACH_STM32F1) += lib/stm32f1
+ dirs-$(CONFIG_MACH_N32G45x) += lib/n32g45x
++dirs-$(CONFIG_MACH_GD32E23X) += lib/gd32e23x/include
+ dirs-$(CONFIG_MACH_STM32F2) += lib/stm32f2
+ dirs-$(CONFIG_MACH_STM32F4) += lib/stm32f4
+ dirs-$(CONFIG_MACH_STM32F7) += lib/stm32f7
+@@ -15,13 +16,19 @@ dirs-$(CONFIG_MACH_STM32G4) += lib/stm32g4
+ dirs-$(CONFIG_MACH_STM32H7) += lib/stm32h7
+ dirs-$(CONFIG_MACH_STM32L4) += lib/stm32l4
+ 
+-MCU := $(shell echo $(CONFIG_MCU))
+-MCU_UPPER := $(shell echo $(CONFIG_MCU) | tr a-z A-Z | tr X x)
++MCU_CONFIG := $(shell echo $(CONFIG_MCU))
++MCU-y := $(MCU_CONFIG)
++MCU-$(CONFIG_MACH_GD32F303) := stm32f103xe
++MCU := $(MCU-y)
++MCU_UPPER := $(shell echo $(MCU) | tr a-z A-Z | tr X x)
+ 
+ CFLAGS-$(CONFIG_HAVE_LIMITED_CODE_SIZE) += -Os
+ CFLAGS-$(CONFIG_MACH_STM32F0) += -mcpu=cortex-m0 -Ilib/stm32f0/include
+ CFLAGS-$(CONFIG_MACH_STM32F103) += -mcpu=cortex-m3
+ CFLAGS-$(CONFIG_MACH_N32G45x) += -mcpu=cortex-m4 -Ilib/n32g45x/include
++CFLAGS-$(CONFIG_MACH_GD32F303XX) += -mcpu=cortex-m4
++CFLAGS-$(CONFIG_MACH_GD32E23X) += -DGD32E230 -mcpu=cortex-m23
++CFLAGS-$(CONFIG_MACH_GD32E23X) += -Ilib/gd32e23x/include
+ CFLAGS-$(CONFIG_MACH_STM32F1) += -Ilib/stm32f1/include
+ CFLAGS-$(CONFIG_MACH_STM32F2) += -mcpu=cortex-m3 -Ilib/stm32f2/include
+ CFLAGS-$(CONFIG_MACH_STM32F4) += -mcpu=cortex-m4 -Ilib/stm32f4/include
+@@ -37,7 +44,9 @@ CFLAGS_klipper.elf += -T $(OUT)src/generic/armcm_link.ld
+ $(OUT)klipper.elf: $(OUT)src/generic/armcm_link.ld
+ 
+ # Add source files
+-src-y += stm32/watchdog.c stm32/clockline.c stm32/dfu_reboot.c
++base-src-y := stm32/watchdog.c stm32/clockline.c stm32/dfu_reboot.c
++base-src-$(CONFIG_MACH_GD32E23X) := stm32/gd32e230.c
++src-y += $(base-src-y)
+ src-y += generic/crc16_ccitt.c
+ src-y += generic/armcm_boot.c generic/armcm_irq.c generic/armcm_reset.c
+ src-$(CONFIG_MACH_STM32F0) += stm32/stm32f0.c ../lib/stm32f0/system_stm32f0xx.c
+@@ -52,6 +61,7 @@ src-$(CONFIG_MACH_STM32L4) += stm32/stm32l4.c ../lib/stm32l4/system_stm32l4xx.c
+ timer-src-y := generic/armcm_timer.c
+ timer-src-$(CONFIG_MACH_STM32F0) := generic/timer_irq.c stm32/stm32f0_timer.c
+ timer-src-$(CONFIG_MACH_STM32G0) := generic/timer_irq.c stm32/stm32f0_timer.c
++timer-src-$(CONFIG_MACH_GD32E23X) := generic/timer_irq.c stm32/gd32e230_timer.c
+ gpio-src-y := stm32/gpio.c stm32/gpioperiph.c
+ gpio-src-$(CONFIG_MACH_STM32F1) := stm32/gpio.c
+ gpio-src-$(CONFIG_MACH_STM32H7) := stm32/stm32h7_gpio.c stm32/gpioperiph.c
+@@ -63,6 +73,7 @@ adc-src-$(CONFIG_MACH_STM32G0) := stm32/stm32f0_adc.c
+ adc-src-$(CONFIG_MACH_STM32G4) := stm32/stm32h7_adc.c
+ adc-src-$(CONFIG_MACH_STM32H7) := stm32/stm32h7_adc.c
+ adc-src-$(CONFIG_MACH_STM32L4) := stm32/stm32h7_adc.c
++adc-src-$(CONFIG_MACH_GD32E23X) := stm32/gd32e230_adc.c
+ src-$(CONFIG_WANT_ADC) += $(adc-src-y)
+ spi-src-y := stm32/spi.c
+ spi-src-$(CONFIG_MACH_STM32H7) := stm32/stm32h7_spi.c
+@@ -71,12 +82,14 @@ i2c-src-y := stm32/stm32f0_i2c.c
+ i2c-src-$(CONFIG_MACH_STM32F1) := stm32/i2c.c
+ i2c-src-$(CONFIG_MACH_STM32F2) := stm32/i2c.c
+ i2c-src-$(CONFIG_MACH_STM32F4) := stm32/i2c.c
++i2c-src-$(CONFIG_MACH_GD32E23X) := stm32/i2c.c
+ src-$(CONFIG_WANT_I2C) += $(i2c-src-y)
+ serial-src-y := stm32/serial.c
+ serial-src-$(CONFIG_MACH_STM32F0) := stm32/stm32f0_serial.c
+ serial-src-$(CONFIG_MACH_STM32G0) := stm32/stm32f0_serial.c
+ serial-src-$(CONFIG_MACH_STM32G4) := stm32/stm32f0_serial.c
+ serial-src-$(CONFIG_MACH_STM32H7) := stm32/stm32f0_serial.c
++serial-src-$(CONFIG_MACH_GD32E23X) := stm32/stm32f0_serial.c
+ src-$(CONFIG_SERIAL) += $(serial-src-y) generic/serial_irq.c
+ usb-src-$(CONFIG_HAVE_STM32_USBFS) := stm32/usbfs.c
+ usb-src-$(CONFIG_HAVE_STM32_USBOTG) := stm32/usbotg.c
+@@ -104,7 +117,7 @@ lib/hidflash/hid-flash:
+ 
+ flash: $(OUT)klipper.bin lib/hidflash/hid-flash
+ 	@echo "  Flashing $< to $(FLASH_DEVICE)"
+-	$(Q)$(PYTHON) ./scripts/flash_usb.py -t $(CONFIG_MCU) -d "$(FLASH_DEVICE)" -s "$(CONFIG_FLASH_APPLICATION_ADDRESS)" $(if $(NOSUDO),--no-sudo) $(OUT)klipper.bin
++	$(Q)$(PYTHON) ./scripts/flash_usb.py -t $(MCU) -d "$(FLASH_DEVICE)" -s "$(CONFIG_FLASH_APPLICATION_ADDRESS)" $(if $(NOSUDO),--no-sudo) $(OUT)klipper.bin
+ 
+ serialflash: $(OUT)klipper.bin
+ 	@echo "  Flashing $< to $(FLASH_DEVICE) via stm32flash"
+diff --git a/src/stm32/i2c.c b/src/stm32/i2c.c
+index 7ecbcd6d..755cf144 100644
+--- a/src/stm32/i2c.c
++++ b/src/stm32/i2c.c
+@@ -18,12 +18,17 @@ struct i2c_info {
+     uint8_t scl_pin, sda_pin;
+ };
+ 
++#if CONFIG_MACH_GD32E23X
++DECL_ENUMERATION("i2c_bus", "i2c0", 0);
++DECL_CONSTANT_STR("BUS_PINS_i2c0", "PB6,PB7");
++#else
+ DECL_ENUMERATION("i2c_bus", "i2c1", 0);
+ DECL_CONSTANT_STR("BUS_PINS_i2c1", "PB6,PB7");
+ DECL_ENUMERATION("i2c_bus", "i2c1a", 1);
+ DECL_CONSTANT_STR("BUS_PINS_i2c1a", "PB8,PB9");
+ DECL_ENUMERATION("i2c_bus", "i2c2", 2);
+ DECL_CONSTANT_STR("BUS_PINS_i2c2", "PB10,PB11");
++#endif
+ #if CONFIG_MACH_STM32F2 || CONFIG_MACH_STM32F4
+ DECL_ENUMERATION("i2c_bus", "i2c3", 3);
+ DECL_CONSTANT_STR("BUS_PINS_i2c3", "PA8,PC9");
+@@ -38,9 +43,13 @@ DECL_CONSTANT_STR("BUS_PINS_i2c2_PF1_PF0", "PF1,PF0");
+ #endif
+ 
+ static const struct i2c_info i2c_bus[] = {
++#if CONFIG_MACH_GD32E23X
++    { (I2C_TypeDef *)I2C0, GPIO('B', 6), GPIO('B', 7) },
++#else
+     { I2C1, GPIO('B', 6), GPIO('B', 7) },
+     { I2C1, GPIO('B', 8), GPIO('B', 9) },
+     { I2C2, GPIO('B', 10), GPIO('B', 11) },
++#endif
+ #if CONFIG_MACH_STM32F2 || CONFIG_MACH_STM32F4
+     { I2C3, GPIO('A', 8), GPIO('C', 9) },
+   #if CONFIG_MACH_STM32F2 || CONFIG_MACH_STM32F4x5
+@@ -55,7 +64,7 @@ static const struct i2c_info i2c_bus[] = {
+ static void
+ i2c_busy_errata(uint8_t scl_pin, uint8_t sda_pin)
+ {
+-    if (! CONFIG_MACH_STM32F1)
++    if (!CONFIG_MACH_STM32F1 && !CONFIG_MACH_GD32E23X)
+         return;
+     gpio_peripheral(scl_pin, GPIO_OUTPUT | GPIO_OPEN_DRAIN, 1);
+     gpio_peripheral(sda_pin, GPIO_OUTPUT | GPIO_OPEN_DRAIN, 1);
+@@ -78,8 +87,10 @@ i2c_setup(uint32_t bus, uint32_t rate, uint8_t addr)
+         // Enable i2c clock and gpio
+         enable_pclock((uint32_t)i2c);
+         i2c_busy_errata(ii->scl_pin, ii->sda_pin);
+-        gpio_peripheral(ii->scl_pin, GPIO_FUNCTION(4) | GPIO_OPEN_DRAIN, 1);
+-        gpio_peripheral(ii->sda_pin, GPIO_FUNCTION(4) | GPIO_OPEN_DRAIN, 1);
++        uint32_t function = CONFIG_MACH_GD32E23X ? 1 : 4;
++        uint32_t gpio_mode = GPIO_FUNCTION(function) | GPIO_OPEN_DRAIN;
++        gpio_peripheral(ii->scl_pin, gpio_mode, 1);
++        gpio_peripheral(ii->sda_pin, gpio_mode, 1);
+         i2c->CR1 = I2C_CR1_SWRST;
+         i2c->CR1 = 0;
+ 
+diff --git a/src/stm32/internal.h b/src/stm32/internal.h
+index a30bb621..0c09382a 100644
+--- a/src/stm32/internal.h
++++ b/src/stm32/internal.h
+@@ -4,7 +4,99 @@
+ 
+ #include "autoconf.h" // CONFIG_MACH_STM32F1
+ 
+-#if CONFIG_MACH_STM32F0
++#if CONFIG_MACH_GD32E23X
++#include "gd32e23x.h"
++
++// GD32E23x GPIO registers use the STM32F0-compatible layout.  Provide the
++// common STM32 type so gpio.c and gpioperiph.c can be shared.
++typedef struct {
++    volatile uint32_t MODER;
++    volatile uint32_t OTYPER;
++    volatile uint32_t OSPEEDR;
++    volatile uint32_t PUPDR;
++    volatile uint32_t IDR;
++    volatile uint32_t ODR;
++    volatile uint32_t BSRR;
++    volatile uint32_t LCKR;
++    volatile uint32_t AFR[2];
++    volatile uint32_t BRR;
++} GPIO_TypeDef;
++
++typedef struct {
++    volatile uint32_t CR1;
++    volatile uint32_t CR2;
++    volatile uint32_t SR;
++    volatile uint32_t DR;
++} SPI_TypeDef;
++
++typedef struct {
++    volatile uint32_t CR1;
++    volatile uint32_t CR2;
++    volatile uint32_t CR3;
++    volatile uint32_t BRR;
++    volatile uint32_t GTPR;
++    volatile uint32_t RTOR;
++    volatile uint32_t RQR;
++    volatile uint32_t ISR;
++    volatile uint32_t ICR;
++    volatile uint32_t RDR;
++    volatile uint32_t TDR;
++} USART_TypeDef;
++
++typedef struct {
++    volatile uint32_t CR1;
++    volatile uint32_t CR2;
++    volatile uint32_t OAR1;
++    volatile uint32_t OAR2;
++    volatile uint32_t DR;
++    volatile uint32_t SR1;
++    volatile uint32_t SR2;
++    volatile uint32_t CCR;
++    volatile uint32_t TRISE;
++} I2C_TypeDef;
++
++#define SPI_CR1_CPHA_Pos 0
++#define SPI_CR1_BR_Pos 3
++#define SPI_CR1_SPE SPI_CTL0_SPIEN
++#define SPI_CR1_MSTR SPI_CTL0_MSTMOD
++#define SPI_CR1_SSM SPI_CTL0_SWNSSEN
++#define SPI_CR1_SSI SPI_CTL0_SWNSS
++#define SPI_SR_RXNE SPI_STAT_RBNE
++#define SPI_SR_TXE SPI_STAT_TBE
++#define SPI_SR_BSY SPI_STAT_TRANS
++
++#define USART_CR1_UE USART_CTL0_UEN
++#define USART_CR1_RE USART_CTL0_REN
++#define USART_CR1_TE USART_CTL0_TEN
++#define USART_CR1_RXNEIE USART_CTL0_RBNEIE
++#define USART_CR1_TXEIE USART_CTL0_TBEIE
++#define USART_CR3_OVRDIS USART_CTL2_OVRD
++#define USART_ISR_RXNE USART_STAT_RBNE
++#define USART_ISR_TXE USART_STAT_TBE
++#define USART_BRR_DIV_MANTISSA_Pos 4
++#define USART_BRR_DIV_FRACTION_Pos 0
++
++#define I2C_CR1_PE I2C_CTL0_I2CEN
++#define I2C_CR1_START I2C_CTL0_START
++#define I2C_CR1_STOP I2C_CTL0_STOP
++#define I2C_CR1_ACK I2C_CTL0_ACKEN
++#define I2C_CR1_SWRST I2C_CTL0_SRESET
++#define I2C_SR1_SB I2C_STAT0_SBSEND
++#define I2C_SR1_ADDR I2C_STAT0_ADDSEND
++#define I2C_SR1_TXE I2C_STAT0_TBE
++#define I2C_SR1_RXNE I2C_STAT0_RBNE
++#define I2C_SR1_AF I2C_STAT0_AERR
++#define I2C_SR2_MSL I2C_STAT1_MASTER
++
++#undef GPIOA
++#undef GPIOB
++#undef GPIOC
++#undef GPIOF
++#define GPIOA ((GPIO_TypeDef *)(GPIO_BASE + 0x0000U))
++#define GPIOB ((GPIO_TypeDef *)(GPIO_BASE + 0x0400U))
++#define GPIOC ((GPIO_TypeDef *)(GPIO_BASE + 0x0800U))
++#define GPIOF ((GPIO_TypeDef *)(GPIO_BASE + 0x1400U))
++#elif CONFIG_MACH_STM32F0
+ #include "stm32f0xx.h"
+ #elif CONFIG_MACH_STM32F1
+ #include "stm32f1xx.h"
+@@ -53,4 +145,8 @@ struct cline lookup_clock_line(uint32_t periph_base);
+ uint32_t get_pclock_frequency(uint32_t periph_base);
+ void gpio_clock_enable(GPIO_TypeDef *regs);
+ 
++#if CONFIG_MACH_GD32E23X
++uint32_t is_enable_pclock(uint32_t pclk);
++#endif
++
+ #endif // internal.h
+diff --git a/src/stm32/spi.c b/src/stm32/spi.c
+index 358d21a2..337502b9 100644
+--- a/src/stm32/spi.c
++++ b/src/stm32/spi.c
+@@ -15,7 +15,12 @@ struct spi_info {
+     uint8_t miso_pin, mosi_pin, sck_pin, miso_af, mosi_af, sck_af;
+ };
+ 
+-#if CONFIG_MACH_STM32F0
++#if CONFIG_MACH_GD32E23X
++  DECL_ENUMERATION("spi_bus", "spi0", 0);
++  DECL_CONSTANT_STR("BUS_PINS_spi0", "PA6,PA7,PA5");
++  DECL_ENUMERATION("spi_bus", "spi1", 1);
++  DECL_CONSTANT_STR("BUS_PINS_spi1", "PB14,PB15,PB13");
++#elif CONFIG_MACH_STM32F0
+   DECL_ENUMERATION("spi_bus", "spi2_PB14_PB15_PB13", 0);
+   DECL_CONSTANT_STR("BUS_PINS_spi2_PB14_PB15_PB13", "PB14,PB15,PB13");
+   DECL_ENUMERATION("spi_bus", "spi1_PA6_PA7_PA5", 1);
+@@ -228,7 +233,11 @@ struct spi_info {
+     GPIO_FUNCTION(mosi), GPIO_FUNCTION(sck)
+ 
+ static const struct spi_info spi_bus[] = {
+-#if CONFIG_MACH_STM32F0
++#if CONFIG_MACH_GD32E23X
++  { (SPI_TypeDef *)SPI0, GPIO('A', 6), GPIO('A', 7), GPIO('A', 5), 0, 0, 0 },
++  { (SPI_TypeDef *)SPI1, GPIO('B', 14), GPIO('B', 15),
++    GPIO('B', 13), 0, 0, 0 },
++#elif CONFIG_MACH_STM32F0
+   { SPI2, GPIO('B', 14), GPIO('B', 15), GPIO('B', 13), SPI_FUNCTION(0, 0, 0) },
+   { SPI1, GPIO('A', 6), GPIO('A', 7), GPIO('A', 5), SPI_FUNCTION(0, 0, 0) },
+   { SPI1, GPIO('B', 4), GPIO('B', 5), GPIO('B', 3), SPI_FUNCTION(0, 0, 0) },
+diff --git a/src/stm32/stm32f0_serial.c b/src/stm32/stm32f0_serial.c
+index 964601b6..ede6d578 100644
+--- a/src/stm32/stm32f0_serial.c
++++ b/src/stm32/stm32f0_serial.c
+@@ -12,7 +12,23 @@
+ #include "sched.h" // DECL_INIT
+ 
+ // Select the configured serial port
+-#if CONFIG_STM32_SERIAL_USART1
++#if CONFIG_MACH_GD32E23X && CONFIG_STM32_SERIAL_USART1
++  DECL_CONSTANT_STR("RESERVE_PINS_serial", "PA10,PA9");
++  #define GPIO_Rx GPIO('A', 10)
++  #define GPIO_Tx GPIO('A', 9)
++  #define USARTx_FUNCTION GPIO_FUNCTION(1)
++  #define USARTx ((USART_TypeDef *)USART0)
++  #define USARTx_IRQn USART0_IRQn
++  #define USARTx_IRQHandler USART0_IRQHandler
++#elif CONFIG_MACH_GD32E23X && CONFIG_STM32_SERIAL_USART2
++  DECL_CONSTANT_STR("RESERVE_PINS_serial", "PA3,PA2");
++  #define GPIO_Rx GPIO('A', 3)
++  #define GPIO_Tx GPIO('A', 2)
++  #define USARTx_FUNCTION GPIO_FUNCTION(1)
++  #define USARTx ((USART_TypeDef *)USART1)
++  #define USARTx_IRQn USART1_IRQn
++  #define USARTx_IRQHandler USART1_IRQHandler
++#elif CONFIG_STM32_SERIAL_USART1
+   DECL_CONSTANT_STR("RESERVE_PINS_serial", "PA10,PA9");
+   #define GPIO_Rx GPIO('A', 10)
+   #define GPIO_Tx GPIO('A', 9)
+diff --git a/src/stm32/stm32f1.c b/src/stm32/stm32f1.c
+index d21cb053..9d3636ac 100644
+--- a/src/stm32/stm32f1.c
++++ b/src/stm32/stm32f1.c
+@@ -103,10 +103,10 @@ clock_setup(void)
+ // third one holding the "ex mode" enable bit
+ #define N32_PWR_CTRL3 (*(volatile uint32_t *)(PWR_BASE + 0x0c))
+ 
+-// Return the RCC_CFGR bits that select the given PLL multiplier on the
+-// n32g45x, whose PLLMUL field is five bits wide (PLLMUL[4] is bit 27)
++// Return the RCC_CFGR bits that select a PLL multiplier on STM32F1-compatible
++// chips with an extended PLLMUL field (PLLMUL[4] is bit 27).
+ static uint32_t
+-n32g45x_pll_multiplier_bits(uint32_t mul)
++extended_pll_multiplier_bits(uint32_t mul)
+ {
+     if (mul > 16)
+         // Multipliers above 16 are encoded with PLLMUL[4] (bit 27) set
+@@ -124,6 +124,16 @@ n32g45x_pll_multiplier_bits(uint32_t mul)
+   #endif
+ #endif
+ 
++#if CONFIG_MACH_GD32F303XX
++  #if !CONFIG_STM32_CLOCK_REF_INTERNAL \
++      && (2 * CONFIG_CLOCK_FREQ) % CONFIG_CLOCK_REF_FREQ
++    #error "Unable to generate the requested clock rate from this crystal"
++  #endif
++  #if CONFIG_USB && CONFIG_CLOCK_FREQ != 120000000
++    #error "Unable to generate a 48Mhz usb clock at this system clock rate"
++  #endif
++#endif
++
+ // The n32g45x is register compatible with the stm32f103, but has its
+ // own clock tree: PCLK2 is limited to 72Mhz and PCLK1 to 36Mhz, and
+ // flash wait states scale with HCLK in 32Mhz steps
+@@ -149,11 +159,12 @@ clock_setup_n32g45x(void)
+             cfgr |= RCC_CFGR_PLLXTPRE_HSE_DIV2;
+         else
+             div /= 2;
+-        cfgr |= n32g45x_pll_multiplier_bits(div);
++        cfgr |= extended_pll_multiplier_bits(div);
+     } else {
+         // Configure PLL from internal 8Mhz oscillator (HSI)
+         uint32_t div2 = (CONFIG_CLOCK_FREQ / 8000000) * 2;
+-        cfgr = (0 << RCC_CFGR_PLLSRC_Pos) | n32g45x_pll_multiplier_bits(div2);
++        cfgr = ((0 << RCC_CFGR_PLLSRC_Pos)
++                | extended_pll_multiplier_bits(div2));
+     }
+     // Divide both APB busses by the same amount, using PCLK1's tighter
+     // 36Mhz limit to choose the divisor (RCC_CFGR bits 15:14 are
+@@ -185,6 +196,60 @@ clock_setup_n32g45x(void)
+         ;
+ }
+ 
++// The GD32F303 is register compatible with the STM32F103, but supports a
++// 120Mhz system clock and has an extended USB clock divider.
++#define GD32F303_USB_DIV2_5        (2 << 22)
++#define GD32F303_PWR_LDO_HIGH      (3 << 14)
++#define GD32F303_PWR_HIGHDR_ENABLE (1 << 16)
++#define GD32F303_PWR_HIGHDR_READY  (1 << 16)
++#define GD32F303_PWR_HIGHDR_SWITCH (1 << 17)
++#define GD32F303_PWR_SWITCH_READY  (1 << 17)
++
++static void
++clock_setup_gd32f303(void)
++{
++    uint32_t cfgr;
++    if (!CONFIG_STM32_CLOCK_REF_INTERNAL) {
++        RCC->CR |= RCC_CR_HSEON;
++        uint32_t div = CONFIG_CLOCK_FREQ / (CONFIG_CLOCK_REF_FREQ / 2);
++        cfgr = 1 << RCC_CFGR_PLLSRC_Pos;
++        if ((div & 1) && div <= 32)
++            cfgr |= RCC_CFGR_PLLXTPRE_HSE_DIV2;
++        else
++            div /= 2;
++        cfgr |= extended_pll_multiplier_bits(div);
++    } else {
++        uint32_t div2 = (CONFIG_CLOCK_FREQ / 8000000) * 2;
++        cfgr = ((0 << RCC_CFGR_PLLSRC_Pos)
++                | extended_pll_multiplier_bits(div2));
++    }
++    cfgr |= RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV2 | RCC_CFGR_ADCPRE_DIV8;
++    if (CONFIG_USB)
++        // The GD32F303 encoding 2 selects PLLCLK / 2.5 (120Mhz / 2.5=48Mhz).
++        cfgr |= GD32F303_USB_DIV2_5;
++    RCC->CFGR = cfgr;
++
++    // Select the high performance LDO mode before switching to 120Mhz.
++    RCC->APB1ENR |= RCC_APB1ENR_PWREN;
++    PWR->CR |= GD32F303_PWR_LDO_HIGH;
++
++    RCC->CR |= RCC_CR_PLLON;
++    FLASH->ACR = (2 << FLASH_ACR_LATENCY_Pos) | FLASH_ACR_PRFTBE;
++    while (!(RCC->CR & RCC_CR_PLLRDY))
++        ;
++
++    PWR->CR |= GD32F303_PWR_HIGHDR_ENABLE;
++    while (!(PWR->CSR & GD32F303_PWR_HIGHDR_READY))
++        ;
++    PWR->CR |= GD32F303_PWR_HIGHDR_SWITCH;
++    while (!(PWR->CSR & GD32F303_PWR_SWITCH_READY))
++        ;
++
++    RCC->CFGR = cfgr | RCC_CFGR_SW_PLL;
++    while ((RCC->CFGR & RCC_CFGR_SWS_Msk) != RCC_CFGR_SWS_PLL)
++        ;
++}
++
+ 
+ /****************************************************************
+  * GPIO setup
+@@ -365,7 +430,9 @@ armcm_main(void)
+     RCC->APB2ENR = 0;
+ 
+     // Setup clocks
+-    if (CONFIG_MACH_N32G45x)
++    if (CONFIG_MACH_GD32F303XX)
++        clock_setup_gd32f303();
++    else if (CONFIG_MACH_N32G45x)
+         clock_setup_n32g45x();
+     else
+         clock_setup();
+-- 
+2.43.0
+
