@@ -203,8 +203,8 @@ verify() {
 case "$MODE" in
     profiles)    write_profiles ;;
     build)       preflight 0; write_profiles; build_all ;;
-    flash)       preflight 1; flash_all; sleep 6; verify ;;
+    flash)       preflight 1; flash_all; sleep 10; verify ;;
     verify)      verify ;;
-    all)         preflight 1; write_profiles; build_all; flash_all; sleep 6; verify ;;
+    all)         preflight 1; write_profiles; build_all; flash_all; sleep 10; verify ;;
     *)           echo "usage: [WITH_HOST=1] $0 {all|profiles|build|flash|verify}"; exit 1 ;;
 esac
